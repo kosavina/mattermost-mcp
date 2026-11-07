@@ -7,7 +7,13 @@ authors = [
     { name = "Kirill Savina", email = "99422083+kosavina@users.noreply.github.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "fastmcp>=4.1.6,<5",
+    "uvicorn>=0.35",
+]
+
+[project.scripts]
+mattermost-mcp = "mattermost_mcp.server:main"
 
 [build-system]
 requires = ["uv_build>=0.13.7,<0.14.0"]
