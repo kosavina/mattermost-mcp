@@ -6,4 +6,4 @@ def test_health_returns_ok() -> None:
 
 
 def test_health_status_value() -> None:
-    assert health() == {"status": "OK"}
+    assert health() == {"status": "ok"}
