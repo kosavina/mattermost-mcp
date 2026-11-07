@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+*.egg-info/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environment
+.venv/
+
+# Tool caches
+.ruff_cache/
+.pytest_cache/
+
+# Notes and reports
+notes/
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# macOS
+.DS_Store
+._*
