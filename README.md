@@ -54,13 +54,50 @@ system, no Linux capabilities, published on this machine only):
 
 ```sh
 sudo docker build --tag mattermost-mcp:dev .
-sudo docker run --rm --name mattermost-mcp --read-only --tmpfs /tmp --cap-drop ALL \
+sudo docker run --rm --name mattermost-mcp --read-only --tmpfs /tmp \
+  --tmpfs /data:uid=10001,mode=700 --cap-drop ALL \
   --security-opt no-new-privileges:true -p 127.0.0.1:8000:8000 mattermost-mcp:dev
 ```
 
 Then open <http://127.0.0.1:8000/health>. It answers `{"status":"ok","commit":"dev"}`; images
 built by CI report the commit they were built from. The MCP endpoint is
 `http://127.0.0.1:8000/mcp`, as above.
+
+## Events
+
+The server implements [MCP Events](https://developers.openai.com/plugins/build/mcp-events) with
+webhook delivery, for one event: `test.message`. It carries only text that the owner types on
+the server, to try out delivery end to end. It has no filters.
+
+There are no logins until a later milestone, so a stranger can subscribe too. These limits keep
+the worst case harmless:
+
+- Webhooks go only to `https` on port 443 at the hosts in `MCP_EVENTS_CALLBACK_HOSTS`
+  (comma-separated, default `connectors.api.openai.com`).
+- Every address the host resolves to must be public. The server connects to the address it
+  checked, follows no redirects and uses no proxy. No setting switches this off.
+- At most `MCP_EVENTS_MAX_SUBSCRIPTIONS` subscriptions exist in total (default 5), with at most
+  10 verification attempts a minute.
+- A subscription lives for 10 to 60 minutes, then has to be refreshed.
+- Events are sent only by the command below, which needs SSH and `sudo` on the server. **Never
+  type anything private: assume a stranger is subscribed.**
+
+Subscriptions are kept in `$MCP_DATA_DIR/events.sqlite3` (the `app_data` volume at `/data` on the
+server, `.data/` locally). The file holds the signing secrets and only the app user can read
+it. The app refuses to start if it cannot write there.
+
+On the server:
+
+```sh
+sudo docker exec mattermost-mcp-app-1 mattermost-mcp-events list
+sudo docker exec mattermost-mcp-app-1 mattermost-mcp-events send-test "Hello from the server"
+sudo docker exec mattermost-mcp-app-1 mattermost-mcp-events remove <id>
+sudo docker exec mattermost-mcp-app-1 mattermost-mcp-events remove --all
+```
+
+`list` shows each subscription's id, callback host, URL fingerprint, age and last delivery status,
+never its secret or full URL. `send-test` prints one line per subscription and exits with 1 if
+there is no active subscription or a delivery failed.
 
 ## Deployment
 
@@ -103,6 +140,12 @@ sudo docker compose -p mattermost-mcp logs -f app
   method, without payloads.
 - Loggers `uvicorn` and `uvicorn.error` write the server's startup messages and unhandled
   exceptions. Logger `mcp` writes the MCP SDK's warnings and errors.
+
+- Logger `mattermost_mcp.events` writes one line per subscribe, refresh, unsubscribe,
+  verification, delivery attempt and refusal: the action, event, subscription id, callback host,
+  a fingerprint of the URL, the requested and granted lifetime, the outcome, the status and the
+  attempt. Secrets, challenges, full URLs and bodies are never logged. `send-test` runs in its
+  own process, so its delivery lines appear on that command's stderr, not in the app log.
 
 To roll back, open an older run on main in the Actions tab and re-run its `deploy` job: it
 sends that run's commit SHA, so the server goes back to that commit and its image.
