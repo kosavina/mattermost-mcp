@@ -11,6 +11,9 @@ import pytest
 import uvicorn
 from fastmcp import Client
 from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.routing import Route
 
 from mattermost_mcp.server import create_app, uvicorn_settings
 
@@ -59,6 +62,16 @@ def untrusted_client_url(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     # The test client connects from 127.0.0.1, which this setting no longer trusts.
     monkeypatch.setenv("MCP_TRUSTED_PROXIES", "192.0.2.1")
     yield from run_app(create_app(public_host=PUBLIC_HOST))
+
+
+@pytest.fixture
+def crashing_server_url() -> Iterator[str]:
+    async def crash(request: Request) -> Response:
+        raise RuntimeError("crash")
+
+    app = create_app()
+    app.router.routes.append(Route("/crash", crash))
+    yield from run_app(app)
 
 
 @pytest.fixture
@@ -198,3 +211,13 @@ def test_proxy_headers_are_ignored_from_untrusted_address(
     [line] = read_request_log()
     assert "client=127.0.0.1 " in line
     assert "scheme=http " in line
+
+
+def test_unhandled_error_is_logged_as_500(
+    crashing_server_url: str, read_request_log: Callable[[], list[str]]
+) -> None:
+    status, _ = send("GET", crashing_server_url.removesuffix("/mcp") + "/crash")
+
+    assert status == 500
+    [line] = read_request_log()
+    assert "status=500 " in line

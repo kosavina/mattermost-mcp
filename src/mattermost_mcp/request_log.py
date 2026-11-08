@@ -41,6 +41,11 @@ class RequestLogMiddleware:
 
         try:
             await self.app(scope, receive, send_and_record_status)
+        except Exception:
+            # Starlette's ServerErrorMiddleware, outside this one, answers these with a 500.
+            if status is None:
+                status = 500
+            raise
         finally:
             headers = Headers(scope=scope)
             client = scope.get("client")
