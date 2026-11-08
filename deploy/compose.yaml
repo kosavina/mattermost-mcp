@@ -1,0 +1,46 @@
+# Production stack: the app plus Caddy in front. mcp-deploy runs it with
+# /opt/mattermost-mcp/.env and deployed.env (IMAGE_TAG = the commit SHA).
+name: mattermost-mcp
+
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+
+services:
+  app:
+    image: ghcr.io/kosavina/mattermost-mcp:${IMAGE_TAG:?IMAGE_TAG must be a commit SHA}
+    restart: unless-stopped
+    environment:
+      MCP_PUBLIC_HOST: ${MCP_PUBLIC_HOST:?set MCP_PUBLIC_HOST in .env}
+    # No ports: on purpose. Only Caddy, on the private network, reaches the app.
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+  caddy:
+    image: caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e
+    restart: unless-stopped
+    depends_on:
+      app: {condition: service_healthy}
+    environment:
+      MCP_PUBLIC_HOST: ${MCP_PUBLIC_HOST}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./caddy:/etc/caddy:ro   # a folder, so files updated by git are seen
+      - caddy_data:/data        # certificates: keep this volume
+      - caddy_config:/config
+    networks: [internal]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+networks:
+  internal:
+
+volumes:
+  caddy_data:
+  caddy_config:

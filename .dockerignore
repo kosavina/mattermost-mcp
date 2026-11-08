@@ -1,0 +1,11 @@
+.git
+.github
+.venv
+.vscode
+notes
+tests
+**/__pycache__
+.ruff_cache
+.pytest_cache
+.env
+.env.*

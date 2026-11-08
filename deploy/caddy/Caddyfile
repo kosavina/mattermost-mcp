@@ -1,0 +1,10 @@
+{
+	# 443 is open for TCP only, so no HTTP/3 (UDP).
+	servers {
+		protocols h1 h2
+	}
+}
+
+{$MCP_PUBLIC_HOST} {
+	reverse_proxy app:8000
+}

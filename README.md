@@ -46,3 +46,28 @@ uv run ruff check .
 uv run ty check
 uv run pytest
 ```
+
+## Run it in Docker
+
+Build the image and run it with the same restrictions CI's smoke test uses (read-only file
+system, no Linux capabilities, published on this machine only):
+
+```sh
+docker build --tag mattermost-mcp:dev .
+docker run --rm --name mattermost-mcp --read-only --tmpfs /tmp --cap-drop ALL \
+  --security-opt no-new-privileges:true -p 127.0.0.1:8000:8000 mattermost-mcp:dev
+```
+
+Then open <http://127.0.0.1:8000/health>. It answers `{"status":"ok","commit":"dev"}`; images
+built by CI report the commit they were built from. The MCP endpoint is
+`http://127.0.0.1:8000/mcp`, as above.
+
+## Deployment
+
+The production stack lives in `deploy/`: `compose.yaml` runs the app behind Caddy, which
+serves HTTPS for the host name in `MCP_PUBLIC_HOST` and is the only container with published
+ports. CI builds an image for every commit and, on main, pushes it to
+`ghcr.io/kosavina/mattermost-mcp` tagged with the full commit SHA. On the server,
+`deploy/mcp-deploy` starts a given commit's image. An admin installs that script by hand to
+`/usr/local/bin/mcp-deploy`: it is the only command the CI deploy key may run, so a pull
+request cannot change it.

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# mcp-deploy: deploys one commit of main on this server.
+#
+# This is the only command the CI deploy key may run: its line in ~deploy/.ssh/authorized_keys
+# starts with restrict,command="/usr/local/bin/mcp-deploy", so sshd runs this script whatever
+# the client asks for, and passes the request in SSH_ORIGINAL_COMMAND. The script accepts only
+# a 40-character commit SHA that is on origin/main, checks it out, and starts that image.
+#
+# It is not installed by the deploy itself: an admin copies it by hand to /usr/local/bin
+# (root-owned, mode 0755), so a commit cannot change what the key is allowed to do.
+set -euo pipefail
+APP_DIR=${MCP_DEPLOY_APP_DIR:-/opt/mattermost-mcp}
+REPO_DIR=$APP_DIR/repo
+log() { logger -t mcp-deploy -- "$*" || true; echo "mcp-deploy: $*" >&2; }
+
+sha=${SSH_ORIGINAL_COMMAND:-}
+if [[ ! $sha =~ ^[0-9a-f]{40}$ ]]; then
+  log "refused: expected one 40-character commit SHA"; exit 2
+fi
+exec 9>"$APP_DIR/deploy.lock"          # one deploy at a time
+if ! flock --wait 300 9; then log "refused: another deploy is still running"; exit 75; fi
+
+log "requested: $sha"
+git -C "$REPO_DIR" fetch --quiet origin main
+if ! git -C "$REPO_DIR" merge-base --is-ancestor "$sha" origin/main 2>/dev/null; then
+  log "refused: $sha is not a commit on main"; exit 3
+fi
+git -C "$REPO_DIR" checkout --quiet --detach "$sha"
+printf 'IMAGE_TAG=%s\n' "$sha" >"$APP_DIR/deployed.env"
+
+compose=(docker compose --project-directory "$REPO_DIR/deploy" -f "$REPO_DIR/deploy/compose.yaml"
+  --env-file "$APP_DIR/.env" --env-file "$APP_DIR/deployed.env")
+"${compose[@]}" up --detach --pull always --remove-orphans --wait --wait-timeout 120
+"${compose[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+docker image prune --all --force --filter "until=168h" >/dev/null
+log "deployed: $sha"
