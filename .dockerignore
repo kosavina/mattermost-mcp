@@ -5,6 +5,7 @@
 notes
 tests
 **/__pycache__
+.data
 .ruff_cache
 .pytest_cache
 .env

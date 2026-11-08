@@ -19,6 +19,9 @@ htmlcov/
 # Notes and reports
 notes/
 
+# Local event subscriptions, including signing secrets
+.data/
+
 # Secrets
 .env
 .env.*

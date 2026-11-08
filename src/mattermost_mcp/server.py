@@ -10,13 +10,17 @@ Environment variables:
   X-Forwarded-Proto headers are believed. Default 127.0.0.1; production sets the subnet of the
   private Docker network, where only Caddy connects from.
 - APP_COMMIT: the commit the image was built from, reported by /health. Default "dev".
+- MCP_DATA_DIR: the folder of the subscriptions database. Default .data; the image sets /data.
+- MCP_EVENTS_CALLBACK_HOSTS: the comma-separated host names that webhooks may be sent to. Default
+  connectors.api.openai.com.
+- MCP_EVENTS_MAX_SUBSCRIPTIONS: how many subscriptions may exist in total. Default 5.
 """
 
 import logging
 import os
 import sys
 from importlib.metadata import version
-from typing import Any
+from typing import Any, TextIO
 
 import uvicorn
 from fastmcp import FastMCP
@@ -26,7 +30,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from mattermost_mcp import health
+from mattermost_mcp.callbacks import EventsRuntime
+from mattermost_mcp.events import AdvertiseEvents, EventsExtension
 from mattermost_mcp.request_log import RequestLogMiddleware
+from mattermost_mcp.store import Store, StoreError, database_path
 
 PORT = 8000
 
@@ -40,7 +47,11 @@ LOG_LEVELS = {
 }
 
 mcp = FastMCP("mattermost-mcp", version=version("mattermost-mcp"))
+# Payloads stay off: the params of events/subscribe carry the webhook signing secret.
 mcp.add_middleware(LoggingMiddleware(include_payloads=False))
+mcp.add_middleware(AdvertiseEvents())
+events_extension = EventsExtension()
+mcp.add_extension(events_extension)
 
 
 @mcp.tool(
@@ -63,13 +74,22 @@ async def health_route(request: Request) -> JSONResponse:
     return JSONResponse({**health(), "commit": os.environ.get("APP_COMMIT", "dev")})
 
 
-def create_app(public_host: str | None = None) -> Starlette:
+def runtime_from_env() -> EventsRuntime:
+    """Open the real store, or raise StoreError or ValueError."""
+    return EventsRuntime(store=Store(database_path()))
+
+
+def create_app(public_host: str | None = None, events: EventsRuntime | None = None) -> Starlette:
     """Build the ASGI app that serves the MCP endpoint at /mcp and the /health route.
 
     The Host/Origin guard is on for every route: only localhost and, if given, public_host
     are accepted. Requests with any other Host or Origin header are rejected, which protects
     the server from DNS rebinding attacks.
+
+    Without `events`, the three events methods stay unusable; main() always provides it.
     """
+    if events is not None:
+        events_extension.runtime = events
     app = mcp.http_app(
         host_origin_protection=True,
         allowed_hosts=[public_host] if public_host else None,
@@ -98,9 +118,9 @@ class OneLineFormatter(logging.Formatter):
         return super().format(record).replace("\r", "\\r").replace("\n", "\\n")
 
 
-def configure_logging() -> None:
-    """Print the app's, FastMCP's and uvicorn's logs to stdout, one plain line per event."""
-    handler = logging.StreamHandler(sys.stdout)
+def configure_logging(stream: TextIO | None = None) -> None:
+    """Print the app's, FastMCP's and uvicorn's logs, one plain line per event (default stdout)."""
+    handler = logging.StreamHandler(stream or sys.stdout)
     handler.setFormatter(OneLineFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
     for name, level in LOG_LEVELS.items():
         logger = logging.getLogger(name)
@@ -113,4 +133,10 @@ def main() -> None:
     configure_logging()
     host = os.environ.get("MCP_HOST", "127.0.0.1")
     public_host = os.environ.get("MCP_PUBLIC_HOST") or None
-    uvicorn.run(create_app(public_host), **uvicorn_settings(host))
+    # Before the server starts, so that a broken volume fails the deploy's health check instead
+    # of the first subscribe.
+    try:
+        events = runtime_from_env()
+    except (StoreError, ValueError) as error:
+        raise SystemExit(f"mattermost-mcp: {error}") from None
+    uvicorn.run(create_app(public_host, events), **uvicorn_settings(host))
