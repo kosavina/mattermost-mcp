@@ -71,3 +71,42 @@ jobs:
           echo "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           docker push "$IMAGE:$GITHUB_SHA"
           docker logout ghcr.io
+
+  deploy:
+    name: deploy
+    needs: image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}   # this job needs no GitHub token
+    environment:
+      name: production
+      url: https://${{ vars.MCP_PUBLIC_HOST }}/health
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false   # never stop a deploy halfway
+    steps:
+      - name: Deploy over SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+        run: |
+          install -d -m 700 ~/.ssh
+          trap 'rm -f ~/.ssh/deploy_key' EXIT
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          (umask 077; printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key)
+          # The server runs only mcp-deploy, whatever we send; we send the SHA.
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes -o ConnectTimeout=15 "deploy@$DEPLOY_HOST" "$GITHUB_SHA"
+      - name: Check the public endpoint
+        env:
+          MCP_PUBLIC_HOST: ${{ vars.MCP_PUBLIC_HOST }}
+        run: |
+          for _ in $(seq 20); do
+            if curl -fsS "https://$MCP_PUBLIC_HOST/health" | grep -q "\"commit\":\"$GITHUB_SHA\""; then
+              echo "live: $GITHUB_SHA"; exit 0
+            fi
+            sleep 3
+          done
+          echo "https://$MCP_PUBLIC_HOST/health does not report $GITHUB_SHA" >&2; exit 1
