@@ -53,8 +53,8 @@ Build the image and run it with the same restrictions CI's smoke test uses (read
 system, no Linux capabilities, published on this machine only):
 
 ```sh
-docker build --tag mattermost-mcp:dev .
-docker run --rm --name mattermost-mcp --read-only --tmpfs /tmp --cap-drop ALL \
+sudo docker build --tag mattermost-mcp:dev .
+sudo docker run --rm --name mattermost-mcp --read-only --tmpfs /tmp --cap-drop ALL \
   --security-opt no-new-privileges:true -p 127.0.0.1:8000:8000 mattermost-mcp:dev
 ```
 
@@ -85,18 +85,24 @@ Never set it to `*`: anyone could then fake their address and pass the Origin ch
 
 ## Logs
 
-Every event is one plain line on stdout. On the server:
+Every event is one plain line on stdout, including exceptions: the line breaks of a traceback
+are written as a literal `\n`. On the server:
 
 ```sh
 sudo docker compose -p mattermost-mcp logs -f app
 ```
 
 - Logger `mattermost_mcp.http` writes one line per HTTP request, when its response ends: method,
-  path, status, duration, client address, scheme, the `Origin`, `User-Agent` and
-  `MCP-Protocol-Version` headers, and whether `Mcp-Session-Id` is present. A long-lived GET
-  stream therefore appears when it closes. Bodies, credentials and other headers are never logged.
+  path, status, duration, client address, scheme, the `Origin`, `User-Agent`,
+  `MCP-Protocol-Version` and `Mcp-Method` headers, and whether `Mcp-Session-Id` is present. A
+  long-lived GET stream therefore appears when it closes. Bodies, credentials and other headers
+  are never logged. The one request left out is the container's own health check: a `GET /health`
+  from `127.0.0.1` or `::1` that answers 200. Every other `/health` request is logged, including
+  the deploy job's check through Caddy and any failing health check.
 - Logger `fastmcp.middleware.logging` writes a start line and a result line for each JSON-RPC
   method, without payloads.
+- Loggers `uvicorn` and `uvicorn.error` write the server's startup messages and unhandled
+  exceptions. Logger `mcp` writes the MCP SDK's warnings and errors.
 
 To roll back, open an older run on main in the Actions tab and re-run its `deploy` job: it
 sends that run's commit SHA, so the server goes back to that commit and its image.
