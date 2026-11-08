@@ -77,5 +77,26 @@ Every merge to main deploys itself. After `checks` and `image`, the run's `deplo
 `mcp-deploy`, and then waits until `https://<public host>/health` reports that commit. The
 `deploy` job of a run shows whether, and when, its commit went live.
 
+Caddy terminates HTTPS, so the app learns the real scheme and client address from Caddy's
+`X-Forwarded-Proto` and `X-Forwarded-For` headers. It believes those headers only from the
+addresses in `MCP_TRUSTED_PROXIES` (comma-separated addresses or CIDR ranges, default
+`127.0.0.1`). `compose.yaml` sets it to the fixed subnet of the private `internal` network.
+Never set it to `*`: anyone could then fake their address and pass the Origin check.
+
+## Logs
+
+Every event is one plain line on stdout. On the server:
+
+```sh
+sudo docker compose -p mattermost-mcp logs -f app
+```
+
+- Logger `mattermost_mcp.http` writes one line per HTTP request, when its response ends: method,
+  path, status, duration, client address, scheme, the `Origin`, `User-Agent` and
+  `MCP-Protocol-Version` headers, and whether `Mcp-Session-Id` is present. A long-lived GET
+  stream therefore appears when it closes. Bodies, credentials and other headers are never logged.
+- Logger `fastmcp.middleware.logging` writes a start line and a result line for each JSON-RPC
+  method, without payloads.
+
 To roll back, open an older run on main in the Actions tab and re-run its `deploy` job: it
 sends that run's commit SHA, so the server goes back to that commit and its image.
