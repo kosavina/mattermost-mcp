@@ -1,7 +1,9 @@
 import http.client
+import io
 import json
 import logging
 import socket
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -15,7 +17,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
 
-from mattermost_mcp.server import create_app, uvicorn_settings
+from mattermost_mcp.server import LOG_LEVELS, configure_logging, create_app, uvicorn_settings
 
 PUBLIC_HOST = "mcp.example.test"
 BEHIND_PROXY = {
@@ -64,14 +66,40 @@ def untrusted_client_url(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     yield from run_app(create_app(public_host=PUBLIC_HOST))
 
 
-@pytest.fixture
-def crashing_server_url() -> Iterator[str]:
+def create_crashing_app() -> Starlette:
     async def crash(request: Request) -> Response:
         raise RuntimeError("crash")
 
     app = create_app()
     app.router.routes.append(Route("/crash", crash))
-    yield from run_app(app)
+    return app
+
+
+@pytest.fixture
+def crashing_server_url() -> Iterator[str]:
+    yield from run_app(create_crashing_app())
+
+
+@pytest.fixture
+def production_log(monkeypatch: pytest.MonkeyPatch) -> Iterator[io.StringIO]:
+    # The handler binds to stdout when it is created, and the server thread writes to it later.
+    # The loggers are global and caplog needs them to propagate, so they are restored afterwards.
+    stream = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", stream)
+    loggers = [logging.getLogger(name) for name in LOG_LEVELS]
+    saved = [(logger, logger.handlers[:], logger.level, logger.propagate) for logger in loggers]
+    configure_logging()
+    yield stream
+    for logger, handlers, level, propagate in saved:
+        logger.handlers[:] = handlers
+        logger.setLevel(level)
+        logger.propagate = propagate
+
+
+@pytest.fixture
+def crashing_server_url_with_production_log(production_log: io.StringIO) -> Iterator[str]:
+    # Logging is configured first, as in main(), so a server that overwrites it fails the test.
+    yield from run_app(create_crashing_app())
 
 
 @pytest.fixture
@@ -221,3 +249,81 @@ def test_unhandled_error_is_logged_as_500(
     assert status == 500
     [line] = read_request_log()
     assert "status=500 " in line
+
+
+def test_exception_is_logged_on_one_line(
+    crashing_server_url_with_production_log: str, production_log: io.StringIO
+) -> None:
+    # The case M5 left open: uvicorn's "Exception in ASGI application" with its traceback.
+    url = crashing_server_url_with_production_log.removesuffix("/mcp") + "/crash"
+    status, _ = send("GET", url)
+    assert status == 500
+
+    # uvicorn logs the exception just after the client has its response.
+    deadline = time.monotonic() + 5
+    while "RuntimeError" not in production_log.getvalue() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.05)
+
+    lines = production_log.getvalue().splitlines()
+    [line] = [line for line in lines if "RuntimeError" in line]
+    assert " uvicorn.error " in line
+    assert "Traceback (most recent call last):\\n" in line
+    assert "RuntimeError: crash" in line
+    assert not [line for line in lines if line.startswith("  File")]
+
+
+@pytest.mark.parametrize("name", LOG_LEVELS)
+def test_every_configured_logger_keeps_a_traceback_on_one_line(
+    name: str, production_log: io.StringIO
+) -> None:
+    try:
+        raise ValueError("first\nsecond")
+    except ValueError:
+        logging.getLogger(name).exception("failed")
+
+    [line] = production_log.getvalue().splitlines()
+    assert "ValueError: first\\nsecond" in line
+
+
+def test_container_health_check_is_not_logged(
+    server_url: str, read_request_log: Callable[[], list[str]]
+) -> None:
+    base_url = server_url.removesuffix("/mcp")
+    status, _ = send("GET", base_url + "/health")
+    assert status == 200
+
+    # read_request_log waits for a line, so give it one that proves the log is working.
+    send("GET", base_url + "/marker")
+    [line] = read_request_log()
+    assert 'path="/marker"' in line
+
+
+def test_health_check_through_the_proxy_is_logged(
+    public_server_url: str, read_request_log: Callable[[], list[str]]
+) -> None:
+    # The deploy job's check comes through Caddy, so it has the caller's address.
+    status, _ = send("GET", public_server_url.removesuffix("/mcp") + "/health", BEHIND_PROXY)
+    assert status == 200
+
+    [line] = read_request_log()
+    assert 'path="/health"' in line
+    assert "client=203.0.113.9 " in line
+
+
+def test_failing_health_check_from_loopback_is_logged(
+    server_url: str, read_request_log: Callable[[], list[str]]
+) -> None:
+    status, _ = send("GET", server_url.removesuffix("/mcp") + "/health", {"Host": "evil.example"})
+    assert status == 421
+
+    [line] = read_request_log()
+    assert 'path="/health"' in line
+    assert "status=421 " in line
+
+
+def test_mcp_method_is_logged(server_url: str, read_request_log: Callable[[], list[str]]) -> None:
+    post_empty_body(server_url, {"Mcp-Method": "tools/call"})
+
+    [line] = read_request_log()
+    assert 'mcp_method="tools/call"' in line

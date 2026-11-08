@@ -30,6 +30,15 @@ from mattermost_mcp.request_log import RequestLogMiddleware
 
 PORT = 8000
 
+# The MCP SDK logs a failing request handler at ERROR; its INFO lines would only add noise.
+LOG_LEVELS = {
+    "mattermost_mcp": logging.INFO,
+    "fastmcp": logging.INFO,
+    "uvicorn": logging.INFO,
+    "uvicorn.error": logging.INFO,
+    "mcp": logging.WARNING,
+}
+
 mcp = FastMCP("mattermost-mcp", version=version("mattermost-mcp"))
 mcp.add_middleware(LoggingMiddleware(include_payloads=False))
 
@@ -77,17 +86,26 @@ def uvicorn_settings(host: str, port: int = PORT) -> dict[str, Any]:
         "forwarded_allow_ips": os.environ.get("MCP_TRUSTED_PROXIES") or "127.0.0.1",
         # RequestLogMiddleware already writes one line per request, without the query string.
         "access_log": False,
+        # Otherwise uvicorn replaces the handlers that configure_logging() set on its loggers.
+        "log_config": None,
     }
 
 
+class OneLineFormatter(logging.Formatter):
+    """Escape line breaks, so that a traceback stays one event in `docker logs` and grep."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return super().format(record).replace("\r", "\\r").replace("\n", "\\n")
+
+
 def configure_logging() -> None:
-    """Print the request log and FastMCP's method log to stdout, one plain line per event."""
+    """Print the app's, FastMCP's and uvicorn's logs to stdout, one plain line per event."""
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
-    for name in ("mattermost_mcp", "fastmcp"):
+    handler.setFormatter(OneLineFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    for name, level in LOG_LEVELS.items():
         logger = logging.getLogger(name)
         logger.handlers[:] = [handler]
-        logger.setLevel(logging.INFO)
+        logger.setLevel(level)
         logger.propagate = False
 
 
