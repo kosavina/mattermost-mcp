@@ -23,7 +23,8 @@ FROM python:3.15.2-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc
 ARG APP_COMMIT=dev
 RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin app
 COPY --from=build /app/.venv /app/.venv
-ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 MCP_HOST=0.0.0.0 APP_COMMIT=$APP_COMMIT
+ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 MCP_HOST=0.0.0.0 APP_COMMIT=$APP_COMMIT \
+    FASTMCP_ENABLE_RICH_LOGGING=false
 USER 10001
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \

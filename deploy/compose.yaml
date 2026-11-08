@@ -6,12 +6,16 @@ x-logging: &logging
   driver: json-file
   options: {max-size: "10m", max-file: "3"}
 
+# The private network's subnet. The app trusts proxy headers from it, and only Caddy is on it.
+x-internal-subnet: &internal_subnet 10.87.0.0/24
+
 services:
   app:
     image: ghcr.io/kosavina/mattermost-mcp:${IMAGE_TAG:?IMAGE_TAG must be a commit SHA}
     restart: unless-stopped
     environment:
       MCP_PUBLIC_HOST: ${MCP_PUBLIC_HOST:?set MCP_PUBLIC_HOST in .env}
+      MCP_TRUSTED_PROXIES: *internal_subnet
     # No ports: on purpose. Only Caddy, on the private network, reaches the app.
     networks: [internal]
     read_only: true
@@ -40,6 +44,9 @@ services:
 
 networks:
   internal:
+    ipam:
+      config:
+        - subnet: *internal_subnet
 
 volumes:
   caddy_data:
