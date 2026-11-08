@@ -71,3 +71,11 @@ ports. CI builds an image for every commit and, on main, pushes it to
 `deploy/mcp-deploy` starts a given commit's image. An admin installs that script by hand to
 `/usr/local/bin/mcp-deploy`: it is the only command the CI deploy key may run, so a pull
 request cannot change it.
+
+Every merge to main deploys itself. After `checks` and `image`, the run's `deploy` job (in the
+`production` environment) connects to the server over SSH, sends the commit SHA to
+`mcp-deploy`, and then waits until `https://<public host>/health` reports that commit. The
+`deploy` job of a run shows whether, and when, its commit went live.
+
+To roll back, open an older run on main in the Actions tab and re-run its `deploy` job: it
+sends that run's commit SHA, so the server goes back to that commit and its image.
