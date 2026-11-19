@@ -101,9 +101,10 @@ there is no active subscription or a delivery failed.
 
 ## Deployment
 
-The production stack lives in `deploy/`: `compose.yaml` runs the app behind Caddy, which
-serves HTTPS for the host name in `MCP_PUBLIC_HOST` and is the only container with published
-ports. CI builds an image for every commit and, on main, pushes it to
+The production stack lives in `deploy/`: `compose.yaml` runs the app, with no published ports.
+HTTPS for the host name in `MCP_PUBLIC_HOST` comes from the server's shared Caddy, which is
+set up outside this repo: it owns ports 80 and 443, serves other sites too, and reaches the app
+by joining the stack's `mattermost-mcp_internal` network. CI builds an image for every commit and, on main, pushes it to
 `ghcr.io/kosavina/mattermost-mcp` tagged with the full commit SHA. On the server,
 `deploy/mcp-deploy` starts a given commit's image. An admin installs that script by hand to
 `/usr/local/bin/mcp-deploy`: it is the only command the CI deploy key may run, so a pull
@@ -118,7 +119,8 @@ Caddy terminates HTTPS, so the app learns the real scheme and client address fro
 `X-Forwarded-Proto` and `X-Forwarded-For` headers. It believes those headers only from the
 addresses in `MCP_TRUSTED_PROXIES` (comma-separated addresses or CIDR ranges, default
 `127.0.0.1`). `compose.yaml` sets it to the fixed subnet of the private `internal` network.
-Never set it to `*`: anyone could then fake their address and pass the Origin check.
+Never set it to `*`: anyone could then fake their address and pass the Origin check. For the
+same reason, only Caddy may join that network: anything else on it could fake the headers too.
 
 ## Logs
 
